@@ -1,0 +1,12 @@
+{
+    "git.ignoreLimitWarning": true,
+    "sqltools.connections": [
+        {
+            "previewLimit": 50,
+            "driver": "SQLite",
+            "name": "Luis",
+            "database": "${workspaceFolder:dsc_v5}/Unit 8 - SQL & Databases/8.3 SQL Case Study - Country Club/SQLFiles Tier 2/sqlite_db_pythonsqlite.db"
+        }
+    ],
+    "sqltools.useNodeRuntime": true
+}

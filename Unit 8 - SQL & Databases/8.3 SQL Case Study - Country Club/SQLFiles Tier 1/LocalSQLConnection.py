@@ -28,7 +28,7 @@ def select_all_tasks(conn):
     
     query1 = """
         SELECT *
-        FROM FACILITIES
+        FROM Facilities
         """
     cur.execute(query1)
  
