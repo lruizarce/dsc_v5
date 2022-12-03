@@ -1,0 +1,217 @@
+---
+title: "NYPD Shooting"
+author: "Luis Ruiz"
+date: "11/07/2022"
+output: pdf_document
+tidy: T
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+knitr::opts_chunk$set(error = TRUE)
+```
+
+```{r packages, eval=T, message=FALSE, warning=FALSE, include=F}
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(tidyr)
+library(ggplot2)
+library(ggrepel)
+library(gridExtra)
+```
+
+## Introduction
+
+Our data-set contains a list of every shooting incident that occurred in NYC going back to 2006-2020. This data was manually extracted every quarter and reviewed by the Office of Management Analysis and Planning. The data-set can be found [**here**](https://catalog.data.gov/dataset/nypd-shooting-incident-data-historic).
+
+## Exploratory Data Analysis
+
+### Load the Data
+
+```{r Import data, message=FALSE, warning=FALSE}
+df <- read.csv("NYPD_Shooting_Incident_Data__Historic_.csv")
+str(df)
+
+```
+
+\
+After loading our data we were able to identify a few issues right off the bat. It appears we have a number of columns with the wrong datatype, unnecessary columns and missing values. We will need to dive deeper into these issues.
+
+### Tidying & Transforming
+
+```{r converting & omitting columns}
+df$OCCUR_DATE <- mdy(df$OCCUR_DATE)
+df$OCCUR_TIME <- format(df$OCCUR_TIME, format="%H:%M:%S")
+df$MONTH <- month(df$OCCUR_DATE)
+df$DAY <- day(df$OCCUR_DATE)
+df$YEAR <- year(df$OCCUR_DATE)
+df$WEEKDAY <- weekdays(df$OCCUR_DATE)
+
+df <-  select(df, -c("Longitude","Latitude",
+        "Lon_Lat","X_COORD_CD","Y_COORD_CD", 
+        "JURISDICTION_CODE","LOCATION_DESC","PRECINCT" ))
+
+```
+
+```{r missing values}
+missingRace <- df[!(is.na(df$PERP_RACE) | df$PERP_RACE==""),]
+missingAge<- df[!(is.na(df$PERP_AGE_GROUP) | df$PERP_AGE_GROUP==""),]
+
+
+```
+
+After manually going through the data-set I was able to convert OCCUR_DATE and OCCUR_TIME to the correct datatype. I also created four new columns . This will allow for a deeper analysis. There were several columns that were no use to us as it contained coordinates. I omitted observations that did not contain the age and race.
+
+## Visualizations
+
+```{r echo=TRUE, message=FALSE, warning=FALSE}
+boroughs <- as.data.frame(table(df$BORO, dnn=list('Borough')), responseName='Incidents')
+
+ggplot(boroughs, aes(x=Borough, y=Incidents, fill=Borough))+ 
+  ggtitle("Gun Incidents by Borough") +
+  geom_bar(stat="identity") +
+  geom_text_repel(data=boroughs, aes(label=Incidents))
+```
+
+Grouping the data by borough gave us a rough overview of where the shooting are taking place in NYC. The borough with the highest number of incidents is Brooklyn at over 10,000 while Staten Island seems to be an outlier with less than 1000 incidents.
+
+```{r Gun incident considered murder}
+deaths <- as.data.frame(table(df$STATISTICAL_MURDER_FLAG,
+      dnn=list('Deaths')), responseName='Incidents')
+ggplot(deaths, aes(x=Deaths, y=Incidents,fill=Deaths)) +     ggtitle("Gun Incidents & Deaths") +
+  geom_bar(stat="identity") + 
+   geom_text_repel(data=deaths,aes(label=Incidents))
+```
+
+We have a total of 25,596 gun incidents in NYC and out of those incidents about 19% or 4,928 ended up as murders. This leaves more questions to be answered. Such as, how many are classified as murders? Victims' age? Victims' race? Gender? We'll try to answer those questions deeper in our analysis.
+
+### Demographics
+
+```{r Data Demographics, echo=TRUE, message=FALSE, warning=FALSE}
+
+victim_race <- df %>%
+  select(YEAR, BORO, VIC_RACE, STATISTICAL_MURDER_FLAG) %>%
+  group_by(YEAR, BORO, VIC_RACE, STATISTICAL_MURDER_FLAG) %>%
+  count(YEAR, BORO, VIC_RACE, STATISTICAL_MURDER_FLAG)
+
+victim_age <- df %>%
+  select(YEAR, BORO, VIC_AGE_GROUP, STATISTICAL_MURDER_FLAG) %>%
+  group_by(YEAR, BORO, VIC_AGE_GROUP, STATISTICAL_MURDER_FLAG) %>%
+  count(YEAR, BORO, VIC_AGE_GROUP, STATISTICAL_MURDER_FLAG)
+
+victim_gender <- df %>%
+  select(YEAR, BORO, VIC_SEX, STATISTICAL_MURDER_FLAG) %>%
+  group_by(YEAR, BORO, VIC_SEX, STATISTICAL_MURDER_FLAG) %>%
+  count(YEAR, BORO, VIC_SEX, STATISTICAL_MURDER_FLAG)
+
+
+```
+
+```{r Victim by Race, echo=TRUE}
+
+ggplot(data = victim_race, mapping = aes(x = VIC_RACE, fill=STATISTICAL_MURDER_FLAG, y=n)) +
+geom_bar(position = position_stack(reverse = TRUE), stat="identity") +
+labs(x = "Victim Race", y="Shooting Incidents", title="Shootings by Victim Race in NYC") +
+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+scale_x_discrete(labels = function(x) str_wrap(x, width = 10))
+  
+
+```
+
+As we can see African American are disproportionately more likely to be involve in gun incidents and die because of it. Followed by White Hispanics and Black Hispanics. The disproportionate amount of Black victims leaves many questions to be answered. Why are they more likely to be involve considering they make up less than 30% of the population in NYC. Who is involve in these incidents? Police officers?
+
+```{r}
+ggplot(data = victim_age, mapping = aes(x = VIC_AGE_GROUP, fill=STATISTICAL_MURDER_FLAG, y=n)) +
+geom_bar(position = position_stack(reverse = TRUE), stat="identity") +
+labs(x = "Victim by Age Group", y="Shooting Incidents", title="Shootings by Victim Age Group in NYC") +
+theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+scale_x_discrete(labels = function(x) str_wrap(x, width = 10))
+```
+
+The most frequent age group involved in gun incident are young adults between the ages of 25-44. Closely followed by the adults between the ages of 25-44. It is unfortunate that our data-set grouped the ages instead of discrete values.
+
+```{r}
+ggplot(data = victim_gender, mapping = aes(x = VIC_SEX, fill = STATISTICAL_MURDER_FLAG, y = n)) +
+geom_bar(position = position_stack(reverse = TRUE), stat = "identity") +
+labs(x = "Victim Sex", y = "Number of Incidents", title = "Shootings by Victim Gender in NYC") 
+```
+
+Overwhelming majoring of the victims are Males.\
+
+## Modeling
+
+### Train Test Split
+
+```{r Split dataset}
+library(caTools)
+# Convert column to 1s and 0s 
+df$STATISTICAL_MURDER_FLAG <- as.integer(as.logical(df$STATISTICAL_MURDER_FLAG))
+# Split data into a train and test set
+split <- sample.split(df$STATISTICAL_MURDER_FLAG, SplitRatio = 0.7)
+train <- subset(df, split == TRUE)
+test <- subset(df, split == FALSE)
+# Rows and Cols for training dataset
+dim(train)
+# Rows and Cols for testing dataset
+dim(test)
+
+# Break down of deaths(1) vs No-deaths(0)
+prop.table(table(train$STATISTICAL_MURDER_FLAG))
+prop.table(table(test$STATISTICAL_MURDER_FLAG))
+```
+
+```{r}
+# Created logistic regression model
+logitModel <- glm(STATISTICAL_MURDER_FLAG ~ BORO + PERP_AGE_GROUP + PERP_SEX + PERP_RACE + VIC_AGE_GROUP + VIC_SEX + VIC_RACE,  data=train, family="binomial")
+
+```
+
+```{r}
+summary(logitModel)
+```
+
+### Training Data Split
+
+```{r message=FALSE, warning=FALSE}
+library(caret)
+p1 <- predict(logitModel, train, type = "response")
+
+pred1 <- ifelse(p1>0.5, 1,0)
+tab1 <- table(Predicted = pred1, Actual = train$STATISTICAL_MURDER_FLAG)
+
+
+
+
+```
+
+### Testing Data Split
+
+```{r message=FALSE, warning=FALSE}
+
+p2 <- predict(logitModel, test, type = "response")
+
+pred2 <- ifelse(p2>0.5, 1,0)
+tab2 <- table(Predicted = pred2, Actual = test$STATISTICAL_MURDER_FLAG)
+
+
+```
+
+## Evaluation
+
+```{r}
+confusionMatrix(tab1)
+
+```
+
+```{r message=FALSE, warning=FALSE}
+confusionMatrix(tab2)
+```
+
+Our model on the training data set contained 17,865 observations. It was able to predict those murdered with an 80% accuracy in both training and testing data. It does a good job in generalizing our data.
+
+## Conclusion
+
+After processing, analyzing, modeling, and evaluating our NYC shooting data-set we were able to draw several important conclusions. But, first, we must discuss the underlying bias within our data-set. It is clear that African Americans are disproportionately more involved in gun incidents compared to other races. Why? Is the police targeting African Americans. We must understand the ethics behind our data and how imbalance in the data will influence future machine learning models.
+
+Trying to tackle gun violence in the US is difficult but reduce the number of victims. We know largest group of victims are African Americans males between the ages of 25-44. Followed by victims between the ages of 18-24.
