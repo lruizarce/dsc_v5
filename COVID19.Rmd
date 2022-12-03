@@ -1,0 +1,224 @@
+---
+title: "COVID-19 Cases"
+author: "Luis Ruiz"
+date: "2022-11-15"
+output: pdf_document
+tidy: True
+---
+
+
+
+## Introduction
+
+```{r load-packages, include=FALSE}
+library(tidyverse)
+library(lubridate)
+library(choroplethr)
+library(ggformula)
+library(choroplethrMaps)
+```
+
+## Import Data
+```{r, echo=T, results='hide', warning=F, message=F}
+url_in <-"https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/"
+file_names <- c("time_series_covid19_confirmed_US.csv",
+                "time_series_covid19_confirmed_global.csv",
+                "time_series_covid19_deaths_US.csv",
+                "time_series_covid19_deaths_global.csv")
+urls <- str_c(url_in,file_names)
+global_cases <- read_csv(urls[2])
+global_deaths <- read_csv(urls[4])
+US_cases <- read_csv(urls[1])
+US_deaths <- read_csv(urls[3])
+uid <- read_csv("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/UID_ISO_FIPS_LookUp_Table.csv")
+```
+
+## Tidying & Transform
+
+
+```{r echo=T, results='hide', warning=F, message=F}
+
+global_cases <- global_cases %>%
+  pivot_longer(cols=-c('Province/State','Country/Region',Lat,Long), names_to="date", values_to="cases") %>% 
+  select(-c(Lat, Long))
+
+global_deaths <- global_deaths %>%
+  pivot_longer(cols=-c('Province/State','Country/Region',Lat,Long), names_to="date", values_to="deaths") %>% 
+  select(-c(Lat, Long))
+
+US_cases <- US_cases %>% 
+  pivot_longer(cols = -(UID:Combined_Key), names_to="date", values_to="cases") %>%
+  select(Admin2:cases) %>% 
+  mutate(date = mdy(date)) %>% 
+  select(-c(Lat, Long_))
+
+US_deaths <- US_deaths %>% 
+  pivot_longer(cols = -(UID:Population), names_to="date", values_to="deaths") %>% 
+  select(Admin2:deaths) %>% 
+  mutate(date = mdy(date)) %>% 
+  select(-c(Lat, Long_))
+
+global <- global_cases %>% 
+  full_join(global_deaths) %>% 
+  rename(Country_Region = `Country/Region`, Province_State = `Province/State`) %>% 
+  mutate(date = mdy(date))
+global <- global %>%
+  unite("Combined_Key",
+        c(Province_State, Country_Region),
+          sep = ", ",
+          na.rm = TRUE,
+          remove = FALSE)
+US <- US_cases %>%
+  full_join(US_deaths)
+
+US <- US %>%
+  filter(!Province_State %in% c("American Samoa","Diamond Princess","Grand Princess","Guam","Northern Mariana Islands","Puerto Rico","Virgin Islands"))
+
+```
+
+
+
+
+```{r, warning=F, message=F}
+### COVID-19 Cases by US state
+US_by_state <- US %>%
+  group_by(Province_State, Country_Region, date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths), Population = sum(Population)) %>%
+  mutate(deaths_per_mill = deaths * 1000000 / Population) %>%
+  select(Province_State, Country_Region, date, cases, deaths, deaths_per_mill, Population) %>%
+  ungroup()
+US_totals <- US_by_state %>%
+  group_by(Country_Region, date) %>%
+  summarize(cases = sum(cases), deaths = sum(deaths), Population = sum(Population)) %>%
+  mutate(deaths_per_mill = deaths * 1000000 / Population) %>%
+  select(Country_Region, date, cases, deaths, deaths_per_mill, Population) %>%
+  ungroup()
+```
+
+## Visualizations
+```{r us_totals, message=FALSE, warning=FALSE}
+US_totals %>%
+  filter(cases > 0) %>%
+  ggplot(aes(x = date, y = cases)) +
+  geom_line(aes(color = "cases")) +
+  geom_point(aes(color = "cases")) +
+  geom_line(aes(y = deaths, color = "deaths")) +
+  geom_point(aes(y = deaths, color = "deaths")) +
+  scale_y_log10() +
+  theme(legend.position = "bottom", axis.text.x = element_text(angle = 90)) +
+  labs(title = "COVID19 in US", y = NULL)
+``` 
+Cases and deaths seem to have a very strong correlation. As the number of cases increase the amount of deaths increase as well.  
+
+
+
+```{r}
+state <- "Colorado"
+US_by_state %>%
+  filter(Province_State == state) %>%
+  filter(cases > 0) %>%
+  ggplot(aes(x = date, y = cases)) +
+  geom_line(aes(color = "cases")) +
+  geom_point(aes(color = "cases")) +
+  geom_line(aes(y = deaths, color = "deaths")) +
+  geom_point(aes(y = deaths, color = "deaths")) +
+  scale_y_log10() +
+  theme(legend.position = "bottom", axis.text.x = element_text(angle = 90)) +
+  labs(title = str_c("COVID19 in ", state), y = NULL)
+```
+I live in the State of Colorado and I wanted to compared the trajectory of CO to the nation. It looks like it follows the same pattern. I wanted a better understand of how COVID-19 affect each state.
+
+
+
+```{r message=FALSE, warning=FALSE}
+US_mortality_rate <- US %>%
+  group_by(Province_State) %>%
+  summarize(totDeaths = sum(deaths),
+            totConfirmed = sum(cases)) %>%
+  mutate(DR = 100 * totDeaths/totConfirmed) %>%
+  mutate(DR = round(DR,2)) %>%
+  arrange(-DR) %>%
+  select(Province_State, DR) %>%
+  rename(region = 1, value = DR) %>%
+  mutate(region = tolower(region))
+# plot
+choro <- StateChoropleth$new(US_mortality_rate)
+choro$title <- "Mortality Rate"
+choro$ggplot_scale <- scale_fill_brewer(name="Mortality Rate (%)", palette="YlOrRd", drop=FALSE)
+choro$render()
+```
+As you can see Colorado had a lower mortality rate in comparison to New York and other states that had a mortality rate between 1.65% and 1.97%. Considering the population I would have expected Texas and California to be states with a higher mortality rate. 
+
+
+## Modeling
+```{r message=FALSE, warning=FALSE}
+US_expected <- US %>%
+  select(date, Province_State, Population, cases, deaths) %>%
+  group_by(Province_State, date) %>%
+  summarize(across(everything(), sum)) %>%
+  arrange(Province_State, date) %>%
+  mutate(new_cases = c(cases[1],diff(cases))) %>%
+  mutate(new_deaths = c(deaths[1],diff(deaths))) %>%
+  mutate(cases_per_C = cases*100000/Population,
+         deaths_per_C = deaths*100000/Population,
+         new_cases_per_C = new_cases*100000/Population,
+         new_deaths_per_C = new_deaths*100000/Population)
+US_expected <- filter(US_expected, date == "2022-09-27")
+```
+### Linear Regression Model
+```{r message=FALSE, warning=FALSE}
+
+expectedByPop <- ggplot(US_expected, aes(x=Population, y=deaths)) +
+  geom_point(size=1) +
+  geom_point(data=US_expected %>% 
+               filter(Province_State=="California"), color="Red") +
+  geom_text(data=subset(US_expected, Province_State =="California"), label="CA", hjust=0, vjust=0) +
+  geom_point(data=US_expected %>% filter(Province_State=="Texas"), color="Red") +
+  geom_text(data=subset(US_expected, Province_State =="Texas"), label="TX", hjust=0, vjust=0) +
+  geom_point(data=US_expected %>% filter(Province_State=="Florida"), color="Red") +
+  geom_text(data=subset(US_expected, Province_State =="Florida"), label="FL", hjust=0, vjust=0) +
+  geom_point(data=US_expected %>% filter(Province_State=="New York"), color="Red") +
+  geom_text(data=subset(US_expected, Province_State =="New York"), label="NY", hjust=0, vjust=0) +
+  geom_text(data=subset(US_expected, Province_State =="Georgia"), label="GA", hjust=0, vjust=0) +
+  geom_point(data=US_expected %>% filter(Province_State=="Georgia"), color="Red") +
+  geom_point(data=US_expected %>% filter(Province_State=="Virginia"), color="Red") +
+  geom_text(data=subset(US_expected, Province_State =="Virginia"), label="VA", hjust=0, vjust=0) +
+  geom_point(data=US_expected %>% filter(Province_State=="Washington"), color="Red") +
+  geom_text(data=subset(US_expected, Province_State =="Washington"), label="WA", hjust=0, vjust=0) +
+  geom_point(data=US_expected %>% filter(Province_State=="Arizona"), color="Red") +
+  geom_text(data=subset(US_expected, Province_State =="Arizona"), label="AZ", hjust=0, vjust=0) +
+  geom_point(data=US_expected %>% filter(Province_State=="Wisconsin"), color="Red") +
+  geom_text(data=subset(US_expected, Province_State =="Wisconsin"), label="WI", hjust=1, vjust=0) +
+  geom_point(data=US_expected %>% filter(Province_State=="Colorado"), color="Red") +
+  geom_text(data=subset(US_expected, Province_State =="Colorado"), label="CO", hjust=0, vjust=1) +
+  geom_point(data=US_expected %>% filter(Province_State=="Alabama"), color="Red") +
+  geom_text(data=subset(US_expected, Province_State =="Alabama"), label="AL", hjust=0, vjust=0) +
+  geom_point(data=US_expected %>% filter(Province_State=="Mississippi"), color="Red") +
+  geom_text(data=subset(US_expected, Province_State =="Mississippi"), label="MS", hjust=0, vjust=0) +
+  stat_smooth(method="lm",
+              formula = y~x) +
+  scale_x_continuous(labels = scales::comma) +
+  scale_y_continuous(labels = scales::comma) +
+  labs(title="Expected Mortality Rate by Populations")
+expectedByPop
+     
+```
+The blue line in the graph is the number of expected deaths our linear model predicted based on population. States located above the blue line should have had less deaths and states located below should have had more deaths. Our linear model indicated that FL, TX, PA, and GA should have had less deaths and CO, WA, and VA should have had more deaths. I wonder why that is? How many people followed CDC guidelines? How many of those deaths involved pre-existing conditions? 
+
+## Conclusion
+- After visualizing our data we gained several insights:
+  - The year 2020 reported the most number of cases and deaths
+  - 2021 saw an increase of cases and deaths but at a much slower rate
+  - The first quarter of 2022 saw a slight increase of cases and deaths
+  - The later third of 2022 saw a plateau of cases and deaths
+  - Southern and Eastern states had the highest mortality rates
+  
+In 2020 COVID-19 was declared a pandemic by the president. Companies like Pfizer, Moderna and J&J developed a vaccine in 2020. We saw FDA approval in 2021 and subsequently we saw a decrease in COVID cases. 
+
+## Bias
+My analysis was only done on the US however, if further analysis is conducted we must understand that not all states and countries followed the same guidelines. The US was one of the first countries to have access to the vaccine and third world countries did not have the same opportunity this can impact cases significantly. Furthermore, classifying COVID rated deaths seem to be defined differently across facilities. 
+
+## Further Analysis
+I want to see the breakdown of cases by country. I also would like to see an analysis done on developed countries and third world countries. Did having access to the vaccine prevent more cases? How many countries establish guidelines similar to those that the CDC established? Was vaccination mandatory?
+
+
